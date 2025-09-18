@@ -1,27 +1,45 @@
-const OpenAI = require("openai");
+const express = require("express");
+const multer = require("multer");
+const fs = require("fs");
+const csv = require("csv-parser");
+const router = express.Router();
+const store = require("../store");
+const upload = multer({ dest: "uploads/" });
 
-// Initialize the client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+router.post("/upload", upload.single("file"), async (req, res) => {
+  if (!req.file)
+    return res
+      .status(400)
+      .json({ error: "CSV file is required (field name: file)" });
+
+  const leads = [];
+  const filepath = req.file.path;
+  fs.createReadStream(filepath)
+    .pipe(csv({ mapHeaders: ({ header }) => header.trim() }))
+    .on("data", (row) => {
+      leads.push({
+        name: (row.name || "").trim(),
+        role: (row.role || "").trim(),
+        company: (row.company || "").trim(),
+        industry: (row.industry || "").trim(),
+        location: (row.location || "").trim(),
+        linkedin_bio: (row.linkedin_bio || "").trim(),
+      });
+    })
+    .on("end", () => {
+      store.leads = leads;
+
+      fs.unlink(filepath, () => {});
+      res.json({ ok: true, count: leads.length });
+    })
+    .on("error", (err) => {
+      fs.unlink(filepath, () => {});
+      res
+        .status(500)
+        .json({ error: "Failed to parse CSV", details: err.message });
+    });
 });
 
-// Utility function to call Chat Completions
-async function chatCompletion(
-  messages,
-  model = process.env.OPENAI_MODEL || "gpt-3.5-turbo"
-) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY missing in environment variables");
-  }
+router.get("/", (req, res) => res.json({ leads: store.leads }));
 
-  const resp = await openai.chat.completions.create({
-    model,
-    messages,
-    max_tokens: 200,
-    temperature: 0.0,
-  });
-
-  return resp.choices[0].message.content.trim();
-}
-
-module.exports = { chatCompletion };
+module.exports = router;
